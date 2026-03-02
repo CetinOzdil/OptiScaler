@@ -104,6 +104,6 @@ class FSRDFeatureDx12 : public FSR31FeatureDx12
     NrdDispatchPlan BuildNrdDispatchPlan(const NVSDK_NGX_Parameter& ngxParams,
                                          const ffxDispatchDescDenoiser& denoiserDesc) const;
 
-    bool DispatchNrdDenoiser(ID3D12GraphicsCommandList* InCommandList, const NrdDispatchPlan& plan,
-                             const NVSDK_NGX_Parameter& ngxParams);
+    bool DispatchNrdDenoiser(ID3D12GraphicsCommandList* InCommandList, const ffxDispatchDescDenoiser& dispatchDesc,
+                             const NrdDispatchPlan& plan, const NVSDK_NGX_Parameter& ngxParams);
 };

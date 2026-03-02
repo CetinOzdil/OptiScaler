@@ -466,8 +466,7 @@ bool FSRDFeatureDx12::Evaluate(ID3D12GraphicsCommandList* InCommandList, NVSDK_N
     const bool isDebugVisSet = (uint32_t) dbgMode & (uint32_t) DebugModes::DataVis;
     const DenoiserBackend denoiserBackend = (DenoiserBackend) cfg.FfxDenoiserBackend.value_or_default();
     const bool isDenoiseBypassed =
-        isDebugVisSet || (dbgMode != DebugModes::None && dbgMode != DebugModes::UpscalerBypass) ||
-        denoiserBackend == DenoiserBackend::NRD;
+        isDebugVisSet || (dbgMode != DebugModes::None && dbgMode != DebugModes::UpscalerBypass);
     const bool isUpscaleBypassed =
         isDebugVisSet || (dbgMode != DebugModes::None && dbgMode != DebugModes::DenoiserBypass);
 
@@ -493,31 +492,33 @@ bool FSRDFeatureDx12::Evaluate(ID3D12GraphicsCommandList* InCommandList, NVSDK_N
         return false;
 
     // Dispatch denoiser
-    if (denoiserBackend == DenoiserBackend::NRD)
-    {
-        const auto nrdPlan = BuildNrdDispatchPlan(inParams, denoiserDesc);
-        isDenoiserReady = DispatchNrdDenoiser(InCommandList, nrdPlan, inParams);
-    }
-    else if (!isDenoiseBypassed)
+    if (!isDenoiseBypassed)
     {
         // Denoise raw input
-        ResourceBarrier(InCommandList, GetD3D12ResFromFFX(signalDesc.radiance.output), 
-            D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE, D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
+        ResourceBarrier(InCommandList, GetD3D12ResFromFFX(signalDesc.radiance.output),
+                        D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE, D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
 
-        isDenoiserReady = DispatchDenoiser(InCommandList, denoiserDesc);
+        if (denoiserBackend == DenoiserBackend::NRD)
+        {
+            const auto nrdPlan = BuildNrdDispatchPlan(inParams, denoiserDesc);
+            isDenoiserReady = DispatchNrdDenoiser(InCommandList, denoiserDesc, nrdPlan, inParams);
+        }
+        else
+        {
+            isDenoiserReady = DispatchDenoiser(InCommandList, denoiserDesc);
+        }
 
-        ResourceBarrier(InCommandList, GetD3D12ResFromFFX(signalDesc.radiance.output), 
-            D3D12_RESOURCE_STATE_UNORDERED_ACCESS, D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE);
+        ResourceBarrier(InCommandList, GetD3D12ResFromFFX(signalDesc.radiance.output),
+                        D3D12_RESOURCE_STATE_UNORDERED_ACCESS, D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE);
 
         if (!isDenoiserReady)
             return false;
 
         // Compose denoised signals
-        FSRDCompIn compIn = 
-        {
+        FSRDCompIn compIn = {
             .InPrimaryColor = GetD3D12ResFromFFX(signalDesc.radiance.output),
             .InFusedModulator = GetD3D12ResFromFFX(signalDesc.fusedAlbedo),
-            .InSkipSignal = FSRDConvShader->GetConvOutput().OutSkipSignal
+            .InSkipSignal = FSRDConvShader->GetConvOutput().OutSkipSignal,
         };
         FSRDCompCfg compCfg = { .DstTexSize = { _convConfig.RenderSize.x, _convConfig.RenderSize.y, 0, 0 } };
 
@@ -845,17 +846,20 @@ FSRDFeatureDx12::NrdDispatchPlan FSRDFeatureDx12::BuildNrdDispatchPlan(
     return plan;
 }
 
-bool FSRDFeatureDx12::DispatchNrdDenoiser(ID3D12GraphicsCommandList* InCommandList, const NrdDispatchPlan& plan,
+bool FSRDFeatureDx12::DispatchNrdDenoiser(ID3D12GraphicsCommandList* InCommandList,
+                                          const ffxDispatchDescDenoiser& dispatchDesc,
+                                          const NrdDispatchPlan& plan,
                                           const NVSDK_NGX_Parameter& ngxParams)
 {
-    (void) InCommandList;
     (void) ngxParams;
 
-    LOG_WARN("NRD backend selected. Running input compatibility path only (NRD runtime not linked). mode={}, specHitDist={}, reactive={}, jitter=[{:.6f}, {:.6f}], motionScale=[{:.6f}, {:.6f}]",
-             (uint32_t) plan.mode, plan.hasSpecHitDistance, plan.hasReactiveMask, plan.jitterX, plan.jitterY,
-             plan.motionScaleX, plan.motionScaleY);
+    LOG_WARN(
+        "NRD backend selected. NRD SDK/runtime is not linked in this build yet; falling back to FFX dispatch. "
+        "mode={}, specHitDist={}, reactive={}, jitter=[{:.6f}, {:.6f}], motionScale=[{:.6f}, {:.6f}]",
+        (uint32_t) plan.mode, plan.hasSpecHitDistance, plan.hasReactiveMask, plan.jitterX, plan.jitterY,
+        plan.motionScaleX, plan.motionScaleY);
 
-    return true;
+    return DispatchDenoiser(InCommandList, dispatchDesc);
 }
 
 static void TryUpdateOption(const CustomOptional<float>& cfgValue, float& currentValue, bool& wasUpdated)

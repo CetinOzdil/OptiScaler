@@ -57,10 +57,12 @@ Resulting auto-selection policy implemented:
   - `DispatchNrdDenoiser(...)`
 - Added runtime backend branching in `Evaluate()`:
   - FFX path unchanged.
-  - NRD path now performs input compatibility/mode planning and logs a full dispatch summary.
+  - NRD path now performs input compatibility/mode planning and then **falls back to FFX denoiser dispatch** to keep output path valid while NRD SDK integration is pending.
 
 ## 5) Current limitation
 
-The repository does not currently vendor/link NVIDIA NRD binaries/headers, so this patch implements the NRD integration surface and planning path, but not NRD runtime execution yet.
+The repository does not currently vendor/link NVIDIA NRD binaries/headers, so full NRD runtime execution is still pending.
 
-To complete full NRD execution, next step is adding NRD SDK dependency and replacing `DispatchNrdDenoiser` placeholder body with actual NRD context creation, permanent pool management, and per-frame dispatch.
+Current behavior keeps rendering correctness by routing the NRD-selected path through NRD planning/mode-selection and then dispatching the existing FFX denoiser as a compatibility fallback.
+
+To complete full NRD execution, next step is adding NRD SDK dependency and replacing the fallback in `DispatchNrdDenoiser` with actual NRD context creation, permanent pool management, and per-frame dispatch.
