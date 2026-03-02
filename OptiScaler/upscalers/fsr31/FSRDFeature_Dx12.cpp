@@ -589,6 +589,8 @@ bool FSRDFeatureDx12::Evaluate(ID3D12GraphicsCommandList* InCommandList, NVSDK_N
     return isDenoiserReady || isDenoiseBypassed;
 }
 
+static const char* ToNrdModeName(FSRDFeatureDx12::NrdMode mode);
+
 bool FSRDFeatureDx12::PrepareDenoiserInput(ID3D12GraphicsCommandList* InCommandList, const NVSDK_NGX_Parameter& inParams,
     ffxDispatchDescDenoiser& dispatchDesc, ffxDispatchDescDenoiserInput1Signal& signalDesc)
 {
@@ -821,7 +823,8 @@ FSRDFeatureDx12::NrdDispatchPlan FSRDFeatureDx12::BuildNrdDispatchPlan(
 {
     NrdDispatchPlan plan {};
 
-    const uint32_t cfgMode = Config::Instance()->NrdWorkingMode.value_or_default();
+    const uint32_t cfgMode = std::min<uint32_t>(Config::Instance()->NrdWorkingMode.value_or_default(),
+                                               (uint32_t) NrdMode::Relax);
     if (cfgMode == (uint32_t) NrdMode::Reblur)
         plan.mode = NrdMode::Reblur;
     else if (cfgMode == (uint32_t) NrdMode::Relax)
@@ -855,11 +858,25 @@ bool FSRDFeatureDx12::DispatchNrdDenoiser(ID3D12GraphicsCommandList* InCommandLi
 
     LOG_WARN(
         "NRD backend selected. NRD SDK/runtime is not linked in this build yet; falling back to FFX dispatch. "
-        "mode={}, specHitDist={}, reactive={}, jitter=[{:.6f}, {:.6f}], motionScale=[{:.6f}, {:.6f}]",
-        (uint32_t) plan.mode, plan.hasSpecHitDistance, plan.hasReactiveMask, plan.jitterX, plan.jitterY,
+        "mode={}({}), specHitDist={}, reactive={}, jitter=[{:.6f}, {:.6f}], motionScale=[{:.6f}, {:.6f}]",
+        (uint32_t) plan.mode, ToNrdModeName(plan.mode), plan.hasSpecHitDistance, plan.hasReactiveMask, plan.jitterX, plan.jitterY,
         plan.motionScaleX, plan.motionScaleY);
 
     return DispatchDenoiser(InCommandList, dispatchDesc);
+}
+
+static const char* ToNrdModeName(FSRDFeatureDx12::NrdMode mode)
+{
+    switch (mode)
+    {
+    case FSRDFeatureDx12::NrdMode::Reblur:
+        return "REBLUR";
+    case FSRDFeatureDx12::NrdMode::Relax:
+        return "RELAX";
+    case FSRDFeatureDx12::NrdMode::Auto:
+    default:
+        return "Auto";
+    }
 }
 
 static void TryUpdateOption(const CustomOptional<float>& cfgValue, float& currentValue, bool& wasUpdated)

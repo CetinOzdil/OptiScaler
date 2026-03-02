@@ -66,3 +66,10 @@ The repository does not currently vendor/link NVIDIA NRD binaries/headers, so fu
 Current behavior keeps rendering correctness by routing the NRD-selected path through NRD planning/mode-selection and then dispatching the existing FFX denoiser as a compatibility fallback.
 
 To complete full NRD execution, next step is adding NRD SDK dependency and replacing the fallback in `DispatchNrdDenoiser` with actual NRD context creation, permanent pool management, and per-frame dispatch.
+
+## 6) UI/Runtime controls
+
+- `FSR-RR Advanced Settings` now exposes:
+  - `Denoiser Backend`: `FFX` or `NRD (planned, FFX fallback)`
+  - `NRD Mode`: `Auto`, `REBLUR`, `RELAX`
+- `Auto` mode chooses `RELAX` if specular hit distance is available, otherwise `REBLUR`.
