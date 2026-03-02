@@ -464,6 +464,7 @@ bool FSRDFeatureDx12::Evaluate(ID3D12GraphicsCommandList* InCommandList, NVSDK_N
 
     const DebugModes dbgMode = (DebugModes) cfg.FfxDenoiserDebugMode.value_or_default();
     const bool isDebugVisSet = (uint32_t) dbgMode & (uint32_t) DebugModes::DataVis;
+    const DenoiserBackend denoiserBackend = (DenoiserBackend) cfg.FfxDenoiserBackend.value_or_default();
     const bool isDenoiseBypassed =
         isDebugVisSet || (dbgMode != DebugModes::None && dbgMode != DebugModes::UpscalerBypass);
     const bool isUpscaleBypassed =
@@ -494,23 +495,30 @@ bool FSRDFeatureDx12::Evaluate(ID3D12GraphicsCommandList* InCommandList, NVSDK_N
     if (!isDenoiseBypassed)
     {
         // Denoise raw input
-        ResourceBarrier(InCommandList, GetD3D12ResFromFFX(signalDesc.radiance.output), 
-            D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE, D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
+        ResourceBarrier(InCommandList, GetD3D12ResFromFFX(signalDesc.radiance.output),
+                        D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE, D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
 
-        isDenoiserReady = DispatchDenoiser(InCommandList, denoiserDesc);
+        if (denoiserBackend == DenoiserBackend::NRD)
+        {
+            const auto nrdPlan = BuildNrdDispatchPlan(inParams, denoiserDesc);
+            isDenoiserReady = DispatchNrdDenoiser(InCommandList, denoiserDesc, nrdPlan, inParams);
+        }
+        else
+        {
+            isDenoiserReady = DispatchDenoiser(InCommandList, denoiserDesc);
+        }
 
-        ResourceBarrier(InCommandList, GetD3D12ResFromFFX(signalDesc.radiance.output), 
-            D3D12_RESOURCE_STATE_UNORDERED_ACCESS, D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE);
+        ResourceBarrier(InCommandList, GetD3D12ResFromFFX(signalDesc.radiance.output),
+                        D3D12_RESOURCE_STATE_UNORDERED_ACCESS, D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE);
 
         if (!isDenoiserReady)
             return false;
 
         // Compose denoised signals
-        FSRDCompIn compIn = 
-        {
+        FSRDCompIn compIn = {
             .InPrimaryColor = GetD3D12ResFromFFX(signalDesc.radiance.output),
             .InFusedModulator = GetD3D12ResFromFFX(signalDesc.fusedAlbedo),
-            .InSkipSignal = FSRDConvShader->GetConvOutput().OutSkipSignal
+            .InSkipSignal = FSRDConvShader->GetConvOutput().OutSkipSignal,
         };
         FSRDCompCfg compCfg = { .DstTexSize = { _convConfig.RenderSize.x, _convConfig.RenderSize.y, 0, 0 } };
 
@@ -580,6 +588,8 @@ bool FSRDFeatureDx12::Evaluate(ID3D12GraphicsCommandList* InCommandList, NVSDK_N
 
     return isDenoiserReady || isDenoiseBypassed;
 }
+
+static const char* ToNrdModeName(FSRDFeatureDx12::NrdMode mode);
 
 bool FSRDFeatureDx12::PrepareDenoiserInput(ID3D12GraphicsCommandList* InCommandList, const NVSDK_NGX_Parameter& inParams,
     ffxDispatchDescDenoiser& dispatchDesc, ffxDispatchDescDenoiserInput1Signal& signalDesc)
@@ -805,6 +815,68 @@ bool FSRDFeatureDx12::ConvertDenoiserBuffers(ID3D12GraphicsCommandList* InComman
     convOut = FSRDConvShader->GetConvOutput();
 
     return true;
+}
+
+
+FSRDFeatureDx12::NrdDispatchPlan FSRDFeatureDx12::BuildNrdDispatchPlan(
+    const NVSDK_NGX_Parameter& ngxParams, const ffxDispatchDescDenoiser& denoiserDesc) const
+{
+    NrdDispatchPlan plan {};
+
+    const uint32_t cfgMode = std::min<uint32_t>(Config::Instance()->NrdWorkingMode.value_or_default(),
+                                               (uint32_t) NrdMode::Relax);
+    if (cfgMode == (uint32_t) NrdMode::Reblur)
+        plan.mode = NrdMode::Reblur;
+    else if (cfgMode == (uint32_t) NrdMode::Relax)
+        plan.mode = NrdMode::Relax;
+    else
+        plan.mode = NrdMode::Auto;
+
+    ID3D12Resource* specHitDist = nullptr;
+    plan.hasSpecHitDistance = TryGetNGXVoidPointer(ngxParams, NVSDK_NGX_Parameter_DLSSD_SpecularHitDistance, specHitDist);
+
+    ID3D12Resource* reactiveMask = nullptr;
+    plan.hasReactiveMask = TryGetNGXVoidPointer(ngxParams, NVSDK_NGX_Parameter_DLSS_Input_Bias_Current_Color_Mask, reactiveMask);
+
+    plan.jitterX = denoiserDesc.jitterOffsets.x;
+    plan.jitterY = denoiserDesc.jitterOffsets.y;
+    plan.motionScaleX = denoiserDesc.motionVectorScale.x;
+    plan.motionScaleY = denoiserDesc.motionVectorScale.y;
+
+    if (plan.mode == NrdMode::Auto)
+        plan.mode = plan.hasSpecHitDistance ? NrdMode::Relax : NrdMode::Reblur;
+
+    return plan;
+}
+
+bool FSRDFeatureDx12::DispatchNrdDenoiser(ID3D12GraphicsCommandList* InCommandList,
+                                          const ffxDispatchDescDenoiser& dispatchDesc,
+                                          const NrdDispatchPlan& plan,
+                                          const NVSDK_NGX_Parameter& ngxParams)
+{
+    (void) ngxParams;
+
+    LOG_WARN(
+        "NRD backend selected. NRD SDK/runtime is not linked in this build yet; falling back to FFX dispatch. "
+        "mode={}({}), specHitDist={}, reactive={}, jitter=[{:.6f}, {:.6f}], motionScale=[{:.6f}, {:.6f}]",
+        (uint32_t) plan.mode, ToNrdModeName(plan.mode), plan.hasSpecHitDistance, plan.hasReactiveMask, plan.jitterX, plan.jitterY,
+        plan.motionScaleX, plan.motionScaleY);
+
+    return DispatchDenoiser(InCommandList, dispatchDesc);
+}
+
+static const char* ToNrdModeName(FSRDFeatureDx12::NrdMode mode)
+{
+    switch (mode)
+    {
+    case FSRDFeatureDx12::NrdMode::Reblur:
+        return "REBLUR";
+    case FSRDFeatureDx12::NrdMode::Relax:
+        return "RELAX";
+    case FSRDFeatureDx12::NrdMode::Auto:
+    default:
+        return "Auto";
+    }
 }
 
 static void TryUpdateOption(const CustomOptional<float>& cfgValue, float& currentValue, bool& wasUpdated)

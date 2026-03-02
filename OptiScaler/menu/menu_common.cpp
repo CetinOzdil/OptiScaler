@@ -2916,6 +2916,56 @@ bool MenuCommon::RenderMenu()
                     {
                         if (auto ch = ScopedCollapsingHeader("FSR-RR Advanced Settings"); ch.IsHeaderOpen())
                         {
+                            int denoiserBackend = config->FfxDenoiserBackend.value_or_default();
+                            denoiserBackend = std::clamp(denoiserBackend, 0, 1);
+
+                            const char* denoiserBackendName = denoiserBackend == 1 ? "NRD (planned, FFX fallback)" : "FFX";
+
+                            if (ImGui::BeginCombo("Denoiser Backend", denoiserBackendName))
+                            {
+                                bool isSelected = denoiserBackend == 0;
+                                if (ImGui::Selectable("FFX", isSelected))
+                                    config->FfxDenoiserBackend = 0;
+                                if (isSelected)
+                                    ImGui::SetItemDefaultFocus();
+
+                                isSelected = denoiserBackend == 1;
+                                if (ImGui::Selectable("NRD (planned, FFX fallback)", isSelected))
+                                    config->FfxDenoiserBackend = 1;
+
+                                ImGui::EndCombo();
+                            }
+
+                            ShowHelpMarker("NRD integration is currently an input mapping and mode planning path.\n"
+                                           "Until NRD SDK/runtime is linked, dispatch falls back to FFX denoiser.");
+
+                            int nrdMode = config->NrdWorkingMode.value_or_default();
+                            nrdMode = std::clamp(nrdMode, 0, 2);
+
+                            const char* nrdModeName = nrdMode == 2 ? "RELAX" : (nrdMode == 1 ? "REBLUR" : "Auto");
+
+                            if (ImGui::BeginCombo("NRD Mode", nrdModeName))
+                            {
+                                bool isSelected = nrdMode == 0;
+                                if (ImGui::Selectable("Auto", isSelected))
+                                    config->NrdWorkingMode = 0;
+                                if (isSelected)
+                                    ImGui::SetItemDefaultFocus();
+
+                                isSelected = nrdMode == 1;
+                                if (ImGui::Selectable("REBLUR", isSelected))
+                                    config->NrdWorkingMode = 1;
+
+                                isSelected = nrdMode == 2;
+                                if (ImGui::Selectable("RELAX", isSelected))
+                                    config->NrdWorkingMode = 2;
+
+                                ImGui::EndCombo();
+                            }
+
+                            ShowHelpMarker("Auto picks RELAX when SpecularHitDistance input is present,\n"
+                                           "otherwise REBLUR.");
+
                             if (!state.ffxDenoiserDebugModes.empty())
                             {
                                 int ffxDenoiseDebugMode = config->FfxDenoiserDebugMode.value_or_default();
