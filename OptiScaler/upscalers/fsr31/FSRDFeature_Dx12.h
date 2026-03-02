@@ -10,6 +10,30 @@
 class FSRDFeatureDx12 : public FSR31FeatureDx12
 {
   public:
+    enum class DenoiserBackend : uint32_t
+    {
+        FFX = 0,
+        NRD = 1,
+    };
+
+    enum class NrdMode : uint32_t
+    {
+        Auto = 0,
+        Reblur = 1,
+        Relax = 2,
+    };
+
+    struct NrdDispatchPlan
+    {
+        NrdMode mode = NrdMode::Auto;
+        bool hasSpecHitDistance = false;
+        bool hasReactiveMask = false;
+        float jitterX = 0.0f;
+        float jitterY = 0.0f;
+        float motionScaleX = 1.0f;
+        float motionScaleY = 1.0f;
+    };
+
     using FSRDConvIn = FSRDPreprocessor_Dx12::ConvInput;
     using FSRDConvCfg = FSRDPreprocessor_Dx12::ConvConstants;
     using FSRDConvOut = FSRDPreprocessor_Dx12::ConvOutput;
@@ -76,4 +100,10 @@ class FSRDFeatureDx12 : public FSR31FeatureDx12
      * @brief Dispatches FSR-RR denoiser converted inputs. Runs before upscaler.
      */
     bool DispatchDenoiser(ID3D12GraphicsCommandList* InCommandList, const ffxDispatchDescDenoiser& dispatchDesc);
+
+    NrdDispatchPlan BuildNrdDispatchPlan(const NVSDK_NGX_Parameter& ngxParams,
+                                         const ffxDispatchDescDenoiser& denoiserDesc) const;
+
+    bool DispatchNrdDenoiser(ID3D12GraphicsCommandList* InCommandList, const NrdDispatchPlan& plan,
+                             const NVSDK_NGX_Parameter& ngxParams);
 };

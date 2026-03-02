@@ -464,8 +464,10 @@ bool FSRDFeatureDx12::Evaluate(ID3D12GraphicsCommandList* InCommandList, NVSDK_N
 
     const DebugModes dbgMode = (DebugModes) cfg.FfxDenoiserDebugMode.value_or_default();
     const bool isDebugVisSet = (uint32_t) dbgMode & (uint32_t) DebugModes::DataVis;
+    const DenoiserBackend denoiserBackend = (DenoiserBackend) cfg.FfxDenoiserBackend.value_or_default();
     const bool isDenoiseBypassed =
-        isDebugVisSet || (dbgMode != DebugModes::None && dbgMode != DebugModes::UpscalerBypass);
+        isDebugVisSet || (dbgMode != DebugModes::None && dbgMode != DebugModes::UpscalerBypass) ||
+        denoiserBackend == DenoiserBackend::NRD;
     const bool isUpscaleBypassed =
         isDebugVisSet || (dbgMode != DebugModes::None && dbgMode != DebugModes::DenoiserBypass);
 
@@ -491,7 +493,12 @@ bool FSRDFeatureDx12::Evaluate(ID3D12GraphicsCommandList* InCommandList, NVSDK_N
         return false;
 
     // Dispatch denoiser
-    if (!isDenoiseBypassed)
+    if (denoiserBackend == DenoiserBackend::NRD)
+    {
+        const auto nrdPlan = BuildNrdDispatchPlan(inParams, denoiserDesc);
+        isDenoiserReady = DispatchNrdDenoiser(InCommandList, nrdPlan, inParams);
+    }
+    else if (!isDenoiseBypassed)
     {
         // Denoise raw input
         ResourceBarrier(InCommandList, GetD3D12ResFromFFX(signalDesc.radiance.output), 
@@ -803,6 +810,50 @@ bool FSRDFeatureDx12::ConvertDenoiserBuffers(ID3D12GraphicsCommandList* InComman
 
     // Set FSR-RR input texture pointers
     convOut = FSRDConvShader->GetConvOutput();
+
+    return true;
+}
+
+
+FSRDFeatureDx12::NrdDispatchPlan FSRDFeatureDx12::BuildNrdDispatchPlan(
+    const NVSDK_NGX_Parameter& ngxParams, const ffxDispatchDescDenoiser& denoiserDesc) const
+{
+    NrdDispatchPlan plan {};
+
+    const uint32_t cfgMode = Config::Instance()->NrdWorkingMode.value_or_default();
+    if (cfgMode == (uint32_t) NrdMode::Reblur)
+        plan.mode = NrdMode::Reblur;
+    else if (cfgMode == (uint32_t) NrdMode::Relax)
+        plan.mode = NrdMode::Relax;
+    else
+        plan.mode = NrdMode::Auto;
+
+    ID3D12Resource* specHitDist = nullptr;
+    plan.hasSpecHitDistance = TryGetNGXVoidPointer(ngxParams, NVSDK_NGX_Parameter_DLSSD_SpecularHitDistance, specHitDist);
+
+    ID3D12Resource* reactiveMask = nullptr;
+    plan.hasReactiveMask = TryGetNGXVoidPointer(ngxParams, NVSDK_NGX_Parameter_DLSS_Input_Bias_Current_Color_Mask, reactiveMask);
+
+    plan.jitterX = denoiserDesc.jitterOffsets.x;
+    plan.jitterY = denoiserDesc.jitterOffsets.y;
+    plan.motionScaleX = denoiserDesc.motionVectorScale.x;
+    plan.motionScaleY = denoiserDesc.motionVectorScale.y;
+
+    if (plan.mode == NrdMode::Auto)
+        plan.mode = plan.hasSpecHitDistance ? NrdMode::Relax : NrdMode::Reblur;
+
+    return plan;
+}
+
+bool FSRDFeatureDx12::DispatchNrdDenoiser(ID3D12GraphicsCommandList* InCommandList, const NrdDispatchPlan& plan,
+                                          const NVSDK_NGX_Parameter& ngxParams)
+{
+    (void) InCommandList;
+    (void) ngxParams;
+
+    LOG_WARN("NRD backend selected. Running input compatibility path only (NRD runtime not linked). mode={}, specHitDist={}, reactive={}, jitter=[{:.6f}, {:.6f}], motionScale=[{:.6f}, {:.6f}]",
+             (uint32_t) plan.mode, plan.hasSpecHitDistance, plan.hasReactiveMask, plan.jitterX, plan.jitterY,
+             plan.motionScaleX, plan.motionScaleY);
 
     return true;
 }

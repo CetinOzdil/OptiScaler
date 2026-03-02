@@ -367,6 +367,10 @@ class Config
 
     // FSR-RR
     CustomOptional<int> FfxDenoiserIndex { 0 };
+    // 0 = FFX Denoiser, 1 = NRD (input-mapping experimental path)
+    CustomOptional<int> FfxDenoiserBackend { 0 };
+    // 0 = auto, 1 = REBLUR, 2 = RELAX
+    CustomOptional<int> NrdWorkingMode { 0 };
     CustomOptional<uint32_t> FfxDenoiserDebugMode { 0 };
 
     CustomOptional<float> FfxDenoiserHistRejection { 1.0f };
